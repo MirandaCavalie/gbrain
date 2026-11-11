@@ -116,6 +116,49 @@ const installHardenedHook = (b: Brain) => installHook(b, 'post-commit', '#!/usr/
 
 for (const { backend, databaseUrl } of pathologicalArms()) {
   describe(`#8073 derived write-through commits its files (${backend})`, () => {
+    test('#8935 atom extraction on a read-only mirror keeps retired files and stores replacements database-only', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        await b.extract(['Original insight'], 'hash-one');
+        const [old] = await b.atoms();
+        const head = b.git('rev-parse', 'HEAD');
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = 'default'");
+        const phase = await b.extract(['Replacement insight'], 'hash-two');
+        const [current] = await b.atoms();
+        expect({ status: phase.status, failed: phase.failed, oldFile: existsSync(b.path(old!.slug)), newFile: existsSync(b.path(current!.slug)),
+          head: b.git('rev-parse', 'HEAD'), dirty: dirty(b), retired: (await b.atoms(false)).map(a => a.slug), bound: current!.source_path })
+          .toEqual({ status: 'ok', failed: [], oldFile: true, newFile: false, head, dirty: '', retired: [old!.slug], bound: null });
+      });
+    }, 180_000);
+
+    test('#8935 enabling atom backfill never writes into a read-only mirror', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        await b.engine.setConfig('cycle.extract_atoms.write_through', 'false');
+        await b.extract(['Database-only insight'], 'hash-one');
+        const [atom] = await b.atoms();
+        const head = b.git('rev-parse', 'HEAD');
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = 'default'");
+        await b.engine.setConfig('cycle.extract_atoms.write_through', 'true');
+        await b.extract([], null);
+        expect({ file: existsSync(b.path(atom!.slug)), head: b.git('rev-parse', 'HEAD'), dirty: dirty(b), atoms: await b.atoms() })
+          .toEqual({ file: false, head, dirty: '', atoms: [atom] });
+      });
+    }, 180_000);
+
+    test('#8935 concept synthesis on a read-only mirror remains database-only with write-through enabled', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = 'default'");
+        await b.engine.setConfig('cycle.synthesize_concepts.write_through', 'true');
+        const head = b.git('rev-parse', 'HEAD');
+        await runPhaseSynthesizeConcepts(b.engine, { sourceId: 'default', _atoms: [
+          { slug: 'atoms/one', title: 'One', body: 'One body.', concept_refs: ['small-launches'], visibility: 'world' },
+          { slug: 'atoms/two', title: 'Two', body: 'Two body.', concept_refs: ['small-launches'], visibility: 'world' },
+        ] });
+        expect((await b.engine.getPage('concepts/small-launches', { sourceId: 'default' }))?.compiled_truth).toContain('2 atoms');
+        expect({ file: existsSync(b.path('concepts/small-launches')), head: b.git('rev-parse', 'HEAD'), dirty: dirty(b) })
+          .toEqual({ file: false, head, dirty: '' });
+      });
+    }, 180_000);
+
     test('extract_atoms: an item\'s atom files land as one commit naming exactly them, and the checkout stays clean', async () => {
       await withBrain(databaseUrl, 'git', async b => {
         const before = commitCount(b);

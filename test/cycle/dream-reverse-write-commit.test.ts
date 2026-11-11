@@ -99,6 +99,49 @@ function refuseCommits(b: Brain): void {
 
 for (const { backend, databaseUrl } of pathologicalArms()) {
   describe(`#8073 dream reverse-write commits its files (${backend})`, () => {
+    test('#8935 a read-only mirror keeps new dream pages database-only, including the cycle summary', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = $1", [SOURCE]);
+        const head = b.git('rev-parse', 'HEAD');
+        const result = await b.reverseWrite([IDEA, PLAN]);
+        const summary = await writeDreamPageFile(b.engine, b.brainDir, SUMMARY, SOURCE,
+          { nativeSourceId: SOURCE, markdown: serializePageToMarkdown((await b.engine.getPage(SUMMARY, { sourceId: SOURCE }))!, []) });
+        expect({ result, summary, files: filesUnder(b.root), head: b.git('rev-parse', 'HEAD'), dirty: dirty(b) })
+          .toEqual({ result: { written: 0, held: [] }, summary: { written: false, skipped: 'mirror_read_only' }, files: ['README.md'], head, dirty: '' });
+        expect((await b.engine.getPage(IDEA, { sourceId: SOURCE }))?.compiled_truth).toContain('Alice Example idea body.');
+      });
+    }, 180_000);
+
+    test('#8935 a read-only mirror keeps its existing dream file while the database advances', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        expect((await b.reverseWrite([IDEA])).written).toBe(1);
+        const bytes = readFileSync(b.path(IDEA), 'utf8');
+        const head = b.git('rev-parse', 'HEAD');
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = $1", [SOURCE]);
+        await importFromContent(b.engine, IDEA, page('Alice Example idea', 'A newer database-only idea.'), { noEmbed: true, sourceId: SOURCE });
+        const result = await b.reverseWrite([IDEA]);
+        expect({ result, bytes: readFileSync(b.path(IDEA), 'utf8'), head: b.git('rev-parse', 'HEAD'), dirty: dirty(b) })
+          .toEqual({ result: { written: 0, held: [] }, bytes, head, dirty: '' });
+        expect((await b.engine.getPage(IDEA, { sourceId: SOURCE }))?.compiled_truth).toContain('A newer database-only idea.');
+        await b.engine.executeRaw("UPDATE sources SET config = config - 'mirror_read_only' WHERE id = $1", [SOURCE]);
+        expect((await b.reverseWrite([IDEA])).written).toBe(1);
+        expect(readFileSync(b.path(IDEA), 'utf8')).toContain('A newer database-only idea.');
+      });
+    }, 180_000);
+
+    test('#8935 retiring a dream page leaves the read-only mirror file and commit untouched', async () => {
+      await withBrain(databaseUrl, 'git', async b => {
+        await b.reverseWrite([IDEA]);
+        const bytes = readFileSync(b.path(IDEA), 'utf8');
+        const head = b.git('rev-parse', 'HEAD');
+        await b.engine.executeRaw("UPDATE sources SET config = config || '{\"mirror_read_only\":true}'::jsonb WHERE id = $1", [SOURCE]);
+        const result = await removeDreamPageFile(b.engine, b.brainDir, IDEA, SOURCE, SOURCE);
+        expect({ result, file: existsSync(b.path(IDEA)), head: b.git('rev-parse', 'HEAD'), dirty: dirty(b) })
+          .toEqual({ result: { removed: false }, file: true, head, dirty: '' });
+        expect(readFileSync(b.path(IDEA), 'utf8')).toBe(bytes);
+      });
+    }, 180_000);
+
     test('a reverse-write of several pages lands as one commit naming exactly their files, and the checkout stays clean', async () => {
       await withBrain(databaseUrl, 'git', async b => {
         const before = commitCount(b);
