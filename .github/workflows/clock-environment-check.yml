@@ -29,7 +29,7 @@ jobs:
           - label: fixed-canonical
             sha: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
             query: ''
-            expected_exit: '0' 
+            expected_exit: '0'
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -89,12 +89,12 @@ jobs:
           export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
           bun scripts/lib/ensure-e2e-database.ts "$DATABASE_URL" gbrain_ci_admin_test
           set +e
-          bash scripts/run-e2e.sh test/e2e/upgrade-from-previous-release.test.ts 2>&1 | tee "$RUNNER_TEMP/lane.log"
+          bash scripts/run-e2e.sh test/e2e/upgrade-from-previous-release.test.ts test/e2e/vector-statement-describe-postgres.test.ts 2>&1 | tee "$RUNNER_TEMP/lane.log"
           result=${PIPESTATUS[0]}
           set -e
           test "$result" = "$EXPECTED_EXIT"
           if [ "$EXPECTED_EXIT" = 1 ]; then
-            python3 -c 'import os, pathlib, xml.etree.ElementTree as E; cases=[c for p in pathlib.Path(os.environ["GBRAIN_TEST_RECEIPT_DIR"]).rglob("*.xml") for c in E.parse(p).iter("testcase")]; assert len(cases)==12 and sum(c.find("failure") is not None for c in cases)==3, "Expected exactly the three golden assertion failures"'
+            python3 -c 'import os, pathlib, xml.etree.ElementTree as E; cases=[c for p in pathlib.Path(os.environ["GBRAIN_TEST_RECEIPT_DIR"]).rglob("*.xml") for c in E.parse(p).iter("testcase")]; assert len(cases)==13 and sum(c.find("failure") is not None for c in cases)==4, "Expected three golden mismatches and the malformed-query TLS failure"'
           fi
       - name: Preserve execution receipts
         if: always()
