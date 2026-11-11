@@ -1,0 +1,108 @@
+name: Clock cache environment comparison
+on:
+  push:
+    branches: [test/clock-cache-env]
+permissions:
+  contents: read
+concurrency:
+  group: clock-cache-environment-comparison
+  cancel-in-progress: true
+env:
+  GBRAIN_CI_DISABLE_TEST_ENV_FILE: '1'
+  GBRAIN_UPGRADE_OWNS_MIGRATIONS: '1'
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: baseline-query
+            sha: 54cf3a98614e8c9245a5a6169ceda122355ecf13
+            query: '?sslmode=disable'
+            expected_exit: '1'
+          - label: baseline-canonical
+            sha: 54cf3a98614e8c9245a5a6169ceda122355ecf13
+            query: ''
+            expected_exit: '0'
+          - label: fixed-canonical
+            sha: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+            query: ''
+            expected_exit: '0' 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gbrain_test
+        ports: ['5432:5432']
+        options: >-
+          --shm-size=1g --health-cmd pg_isready
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      pgbouncer:
+        image: edoburu/pgbouncer:latest
+        env:
+          DB_HOST: postgres
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          POOL_MODE: transaction
+          AUTH_TYPE: plain
+          MAX_CLIENT_CONN: '200'
+          DEFAULT_POOL_SIZE: '10'
+          IGNORE_STARTUP_PARAMETERS: extra_float_digits,statement_timeout,idle_in_transaction_session_timeout,search_path
+        ports: ['55433:5432']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          test "$(git rev-parse HEAD)" = "${{ matrix.sha }}"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run e2e
+        env:
+          EXPECTED_EXIT: ${{ matrix.expected_exit }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gbrain_test${{ matrix.query }}
+          GBRAIN_PGBOUNCER_URL: postgresql://postgres:postgres@localhost:55433/gbrain_pgbouncer_test
+          GBRAIN_PGBOUNCER_DIRECT_URL: postgresql://postgres:postgres@localhost:5432/gbrain_ci_admin_test
+          GBRAIN_PGBOUNCER_E2E_DB: gbrain_pooled_test
+          GBRAIN_CI_REQUIRE_PGBOUNCER: '1'
+          GBRAIN_TEST_DB: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bun scripts/lib/ensure-e2e-database.ts "$DATABASE_URL" gbrain_ci_admin_test
+          set +e
+          bash scripts/run-e2e.sh test/e2e/upgrade-from-previous-release.test.ts 2>&1 | tee "$RUNNER_TEMP/lane.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          test "$result" = "$EXPECTED_EXIT"
+          if [ "$EXPECTED_EXIT" = 1 ]; then
+            python3 -c 'import os, pathlib, xml.etree.ElementTree as E; cases=[c for p in pathlib.Path(os.environ["GBRAIN_TEST_RECEIPT_DIR"]).rglob("*.xml") for c in E.parse(p).iter("testcase")]; assert len(cases)==12 and sum(c.find("failure") is not None for c in cases)==3, "Expected exactly the three golden assertion failures"'
+          fi
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: env-${{ matrix.label }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+          retention-days: 1
+          if-no-files-found: warn
