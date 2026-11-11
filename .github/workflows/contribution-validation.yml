@@ -1,0 +1,218 @@
+name: Clock cache contribution validation
+on:
+  push:
+    branches: [test/clock-cache-validation]
+permissions:
+  contents: read
+concurrency:
+  group: clock-cache-contribution-validation
+  cancel-in-progress: true
+env:
+  GBRAIN_CI_DISABLE_TEST_ENV_FILE: '1'
+  GBRAIN_UPGRADE_OWNS_MIGRATIONS: '1'
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          test "$(git rev-parse HEAD)" = "4dcf3f95fe58e10c9487e55b5b86ac9385267158"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run unit
+        env:
+          SHARD: ${{ matrix.shard }}/28
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bash scripts/run-unit-shard.sh --max-concurrency=1 2>&1 | tee "$RUNNER_TEMP/lane.log"
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unit-${{ matrix.shard || 'all' }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+          retention-days: 1
+          if-no-files-found: warn
+  serial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          test "$(git rev-parse HEAD)" = "4dcf3f95fe58e10c9487e55b5b86ac9385267158"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run serial
+        env:
+          SHARD: ${{ matrix.shard }}/4
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bun run test:serial 2>&1 | tee "$RUNNER_TEMP/lane.log"
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: serial-${{ matrix.shard || 'all' }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+          retention-days: 1
+          if-no-files-found: warn
+  slow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          test "$(git rev-parse HEAD)" = "4dcf3f95fe58e10c9487e55b5b86ac9385267158"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run slow
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bun run test:slow 2>&1 | tee "$RUNNER_TEMP/lane.log"
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: slow-${{ matrix.shard || 'all' }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+          retention-days: 1
+          if-no-files-found: warn
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gbrain_test
+        ports: ['5432:5432']
+        options: >-
+          --shm-size=1g --health-cmd pg_isready
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      pgbouncer:
+        image: edoburu/pgbouncer:latest
+        env:
+          DB_HOST: postgres
+          DB_PORT: '5432'
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          POOL_MODE: transaction
+          AUTH_TYPE: plain
+          MAX_CLIENT_CONN: '200'
+          DEFAULT_POOL_SIZE: '10'
+          IGNORE_STARTUP_PARAMETERS: extra_float_digits,statement_timeout,idle_in_transaction_session_timeout,search_path
+        ports: ['55433:5432']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          test "$(git rev-parse HEAD)" = "4dcf3f95fe58e10c9487e55b5b86ac9385267158"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run e2e
+        env:
+          SHARD: ${{ matrix.shard }}/14
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gbrain_test?sslmode=disable
+          GBRAIN_PGBOUNCER_URL: postgresql://postgres:postgres@localhost:55433/gbrain_pgbouncer_test?sslmode=disable
+          GBRAIN_PGBOUNCER_DIRECT_URL: postgresql://postgres:postgres@localhost:5432/gbrain_ci_admin_test?sslmode=disable
+          GBRAIN_PGBOUNCER_E2E_DB: gbrain_pooled_test
+          GBRAIN_CI_REQUIRE_PGBOUNCER: '1'
+          GBRAIN_TEST_DB: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bun scripts/lib/ensure-e2e-database.ts "$DATABASE_URL" gbrain_ci_admin_test
+          bash scripts/run-e2e.sh 2>&1 | tee "$RUNNER_TEMP/lane.log"
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-${{ matrix.shard || 'all' }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+          retention-days: 1
+          if-no-files-found: warn
