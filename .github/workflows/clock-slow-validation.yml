@@ -1,0 +1,66 @@
+name: Clock cache isolated slow validation
+on:
+  push:
+    branches: [test/clock-slow-validation]
+permissions:
+  contents: read
+concurrency:
+  group: clock-cache-isolated-slow
+  cancel-in-progress: true
+env:
+  GBRAIN_CI_DISABLE_TEST_ENV_FILE: '1'
+  GBRAIN_UPGRADE_OWNS_MIGRATIONS: '1'
+jobs:
+  slow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dcf3f95fe58e10c9487e55b5b86ac9385267158
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Prepare exact contribution revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4dcf3f95fe58e10c9487e55b5b86ac9385267158"
+          git remote set-url origin https://github.com/garrytan/gbrain.git
+          git config --global user.name 'Synthetic Test'
+          git config --global user.email 'test@example.invalid'
+          git fetch --no-tags --depth=1 origin +refs/heads/master:refs/remotes/origin/master
+          bun scripts/ci-bun-install.ts --frozen-lockfile
+          bun run build
+      - name: Run each slow file in a fresh process
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GBRAIN_TEST_RECEIPT_DIR="$RUNNER_TEMP/receipts"
+          bash scripts/run-slow-tests.sh --dry-run-list > "$RUNNER_TEMP/all-slow-files.txt"
+          awk -v n="$SHARD_INDEX" '(NR-1)%8 == n-1' "$RUNNER_TEMP/all-slow-files.txt" > "$RUNNER_TEMP/selected-files.txt"
+          failed=0
+          while IFS= read -r file; do
+            printf '\n=== %s ===\n' "$file" | tee -a "$RUNNER_TEMP/lane.log"
+            bash scripts/run-slow-tests.sh "$file" 2>&1 | tee -a "$RUNNER_TEMP/lane.log" || failed=1
+          done < "$RUNNER_TEMP/selected-files.txt"
+          exit "$failed"
+      - name: Preserve execution receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: slow-isolated-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/lane.log
+            ${{ runner.temp }}/all-slow-files.txt
+            ${{ runner.temp }}/selected-files.txt
+          retention-days: 1
+          if-no-files-found: error
